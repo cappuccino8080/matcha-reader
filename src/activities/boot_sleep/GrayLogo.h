@@ -28,7 +28,7 @@ class GfxRenderer;
 // gets the same treatment: its footprint is computed from its white background on load.
 namespace GrayLogo {
 constexpr int WIDTH = 230;
-constexpr int HEIGHT = 324;
+constexpr int HEIGHT = 325;
 // The smaller copy, for the Departures sleep screen on short panels.
 constexpr int SMALL_WIDTH = 130;
 constexpr int SMALL_HEIGHT = 183;
