@@ -1,2 +1,6 @@
 # Preserve the original whitespace in copied license texts.
 licenses/*.txt -whitespace
+# Keep patch files in LF format on all platforms.
+scripts/sdfat_patches/*.patch text eol=lf
+scripts/pngdec_patches/*.patch text eol=lf
+scripts/jpegdec_patches/*.patch text eol=lf
