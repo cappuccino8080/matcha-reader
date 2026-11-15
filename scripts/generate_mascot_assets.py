@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Generate the cat mascot bitmaps from the drawing in assets/images/cat-reading.png.
+"""Generate Hojicha Reader mascot bitmaps from the locally supplied artwork.
 
-The drawing and everything generated from it is all rights reserved, not MIT: see
-assets/images/LICENSE.
+Source: assets/images/raccoon-dog-reading.png
+This mascot is distinct from the original Matcha Reader cat artwork. Keep the
+original project's licenses and the original cat artwork's license unchanged.
 
-The drawing carries a light gray sticker edge around the cat: the dark sleep screen shows it as the
-white rim that sets the black cat off the black screen; everywhere else it is dropped.
+    python scripts/generate_mascot_assets.py [--preview] [--stamp-fonts DIR]
 
-    python3 scripts/generate_mascot_assets.py [--stamp-fonts DIR]
+Writes the original, firmware-compatible output names:
+  src/images/CatLogo.h
+  src/components/icons/endOfBookCat.h
+  src/network/html/assets/matcha-icon.svg
+  src/components/icons/eobStamp.h       (only with --stamp-fonts)
 
-Writes:
-  src/images/CatLogo.h                      boot/sleep logo and a smaller copy, 4-level gray with the footprint the
-                                            dark sleep screen keeps lit, run-length coded
-  src/components/icons/endOfBookCat.h       end-of-book graphic, 1 bpp drawIcon format
-  src/network/html/assets/matcha-icon.svg   web header and favicon
-  src/components/icons/eobStamp.h           the end-of-book hanko, one per wording, run-length
-                                            coded (only with --stamp-fonts: a folder holding
-                                            NotoSerif{JP,SC,TC,HK}.ttf, SIL OFL)
+The CatLogo.h name and CAT_LOGO_* symbols are intentionally retained for now.
+The image is stored as 4-level RLE with a footprint bit; the mascot itself is
+rendered in hard black/white to avoid dotted edges on the small E-Ink panel.
 """
+
 import argparse
 import base64
 import io
@@ -25,88 +25,109 @@ import random
 import zlib
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "assets" / "images" / "cat-reading.png"
+SOURCE = ROOT / "assets" / "images" / "raccoon-dog-reading.png"
 
-LOGO_WIDTH = 230  # sticker edge included; the poster-size cat of the boot and sleep screens
-SMALL_LOGO_WIDTH = 130  # the Departures sleep screen's cat on screens too short for the full size
-EOB_SIZE = 152  # drawIcon is square; the cat is centred in it at full height
+LOGO_WIDTH = 230
+SMALL_LOGO_WIDTH = 130
+EOB_SIZE = 152
 WEB_SIZE = 128
-# The sticker edge is drawn at gray 238; the cat's own whites are 255 and its ink near 0.
-EDGE_LEVEL = 230
+
+# Output-size thresholds. No dithering: crisp edges are preferred for text.
+INK_THRESHOLD = 190
+# Group nearby strokes/letters into a shared white backing on dark screens.
+FOOTPRINT_JOIN_SIZE = 7  # Pillow Max/Min filters require an odd integer.
+FOOTPRINT_MARGIN_SIZE = 7
 
 
-def shrink(art, width, height):
-    """Per-pixel ink coverage, and whether each pixel lies on the cat's black body or on paper."""
-    coverage = art.resize((width, height), Image.BOX)
-    # Blurring by a few output pixels erases the thin lines and leaves only large dark areas.
-    blur = art.size[0] / width * 1.5
-    body = art.filter(ImageFilter.GaussianBlur(blur)).resize((width, height), Image.BOX)
-    return coverage, body
-
-
-def is_ink(value, on_body):
-    # A single threshold loses either the thin white lines on the body (eye ring, claws) or the thin
-    # black ones on paper (page lines, kana). Each area keeps the lines that contrast with it.
-    return value < 70 if on_body else value < 215
-
-
-def atkinson(gray):
-    """1-bit Atkinson dither: smooth edges without the grain Floyd-Steinberg leaves on line art."""
-    w, h = gray.size
-    px = [float(v) for v in gray.tobytes()]
-    out = bytearray(w * h)
-    for y in range(h):
-        for x in range(w):
-            old = px[y * w + x]
-            new = 0 if old < 128 else 255
-            out[y * w + x] = new
-            err = (old - new) / 8
-            for dx, dy in ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)):
-                if 0 <= x + dx < w and y + dy < h:
-                    px[(y + dy) * w + x + dx] += err
-    return Image.frombytes("L", (w, h), bytes(out))
+def solid_edge(art, width, height):
+    """Return a clean 1-bit L image (0=ink, 255=paper), with no dithering."""
+    small = art.resize((width, height), Image.Resampling.LANCZOS)
+    ink = small.point(lambda v: 255 if v < INK_THRESHOLD else 0, "L")
+    # No post-dilation here: even a 1 px closing step can merge small letters.
+    # The backing mask is expanded separately in build_footprint().
+    return ink.point(lambda v: 0 if v else 255, "L")
 
 
 def bw(art, width, height):
-    """The drawing at 1 bpp: dithered outline, detail rules inside it."""
-    coverage, body = shrink(art, width, height)
-    inside = Image.new("L", (width, height), 255)
-    for i, (v, b) in enumerate(zip(coverage.tobytes(), body.tobytes())):
-        if is_ink(v, b < 128):
-            inside.putpixel((i % width, i // width), 0)
-    # Per-pixel rules make the outer outline bumpy where body and paper meet; there the dither of
-    # the plain shrink follows the curve. 2 px inside the traced silhouette the detail rules take
-    # over again.
-    edge = atkinson(art.resize((width, height), Image.LANCZOS))
-    scale = art.size[0] / width
-    silhouette = _fill_holes(art.point(lambda v: 255 if v < 128 else 0))
-    silhouette = silhouette.filter(ImageFilter.GaussianBlur(scale * 0.5)).resize((width, height), Image.BOX)
-    interior = silhouette.point(lambda v: 255 if v >= 128 else 0).filter(ImageFilter.MinFilter(5))
-    return Image.composite(inside, edge, interior)
+    """Create a black/white logo, preserving solid text and contour lines."""
+    return solid_edge(art, width, height)
 
 
-def build_logo(art, edged, width=LOGO_WIDTH):
+def _fill_holes(ink):
+    """Fill regions enclosed by a nonzero (255) ink mask; return a 0/255 mask."""
+    w, h = ink.size
+    px = ink.load()
+    outside = bytearray(w * h)
+    stack = [(x, y) for x in range(w) for y in (0, h - 1)]
+    stack += [(x, y) for y in range(h) for x in (0, w - 1)]
+    while stack:
+        x, y = stack.pop()
+        if 0 <= x < w and 0 <= y < h and not outside[y * w + x] and px[x, y] == 0:
+            outside[y * w + x] = 1
+            stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+    return Image.frombytes("L", (w, h), bytes(0 if o else 255 for o in outside))
+
+
+def build_footprint(art, width, height, binary=None):
+    """Build the white backing that makes black artwork visible in dark sleep mode.
+
+    Unlike the original plain _fill_holes approach, nearby strokes are joined
+    before filling. For artwork clipped by the right edge (the tea table), the
+    nearby dark line ends are joined along that edge to close its white surface.
+    This is a heuristic for the current mascot; use a separately authored mask
+    if a future image needs precise open-region control.
+    """
+    if binary is None:
+        binary = bw(art, width, height)
+
+    # Black in binary -> 255 in mask. Connect letters and fragmented contours.
+    ink = binary.point(lambda v: 255 if v < 128 else 0, "L")
+    ink = ink.filter(ImageFilter.MaxFilter(FOOTPRINT_JOIN_SIZE))
+    ink = ink.filter(ImageFilter.MinFilter(FOOTPRINT_JOIN_SIZE))
+
+    # The tea table extends off the image's right edge. Its top/bottom lines
+    # otherwise have an opening, so flood fill treats the tabletop as outside.
+    edge_band = min(8, width)
+    right_hits = []
+    px = ink.load()
+    for y in range(height // 2, height):
+        xs = [x for x in range(width - edge_band, width) if px[x, y] != 0]
+        if xs:
+            right_hits.append((y, max(xs)))
+
+    if len(right_hits) >= 2:
+        ymin = right_hits[0][0]
+        ymax = right_hits[-1][0]
+        # Avoid bridging the whole image if an unrelated illustration reaches
+        # the border over an excessively large vertical range.
+        if 2 <= ymax - ymin <= height // 3:
+            draw = ImageDraw.Draw(ink)
+            for y, x in right_hits:
+                draw.line((x, y, width - 1, y), fill=255)
+            draw.line((width - 1, ymin, width - 1, ymax), fill=255)
+
+    footprint = _fill_holes(ink)
+    # Add paper around dark letterforms and the mascot, so black lines do not
+    # disappear into a black sleep-screen background.
+    footprint = footprint.filter(ImageFilter.MaxFilter(FOOTPRINT_MARGIN_SIZE))
+    return footprint
+
+
+def build_logo(art, width=LOGO_WIDTH):
+    """Return width, height, packed RLE for the existing GrayLogo decoder."""
     height = round(art.size[1] * width / art.size[0])
-    coverage, _ = shrink(art, width, height)
     ink = bw(art, width, height)
-    # The 1-bit boot logo draws levels 0-1 as ink, so ink/paper is decided by bw(); the level inside
-    # each half only softens the sleep screen's grayscale rendering.
-    levels = []
-    for v, b in zip(coverage.tobytes(), ink.tobytes()):
-        if b < 128:
-            levels.append(0 if v < 64 else 1)
-        else:
-            levels.append(3 if v > 192 else 2)
-    # Footprint: the cat, the books and the sticker edge around them.
-    footprint = _fill_holes(edged.point(lambda v: 255 if v < 250 else 0)).resize((width, height), Image.BOX)
-    inside = [v >= 128 for v in footprint.tobytes()]
-    # Run-length coded, row-major and continuous across rows: each byte is a 3-bit symbol
-    # (footprint << 2 | level) and a run of 1-32 pixels. The drawing is mostly flat black and
-    # white, so this is about a quarter of 2 bpp plus a 1 bpp mask.
-    symbols = [level | (int(f) << 2) for level, f in zip(levels, inside)]
+    footprint = build_footprint(art, width, height, ink)
+
+    # Preserve the original 3-bit symbol scheme (2-bit level + footprint).
+    # This artwork deliberately uses only pure black (0) and white (3).
+    levels = (0 if pixel < 128 else 3 for pixel in ink.tobytes())
+    backing = (pixel >= 128 for pixel in footprint.tobytes())
+    symbols = [level | (int(inside) << 2) for level, inside in zip(levels, backing)]
+
     rle = bytearray()
     i = 0
     while i < len(symbols):
@@ -123,7 +144,7 @@ def build_end_of_book(art):
     small = bw(art, width, EOB_SIZE)
     square = Image.new("L", (EOB_SIZE, EOB_SIZE), 255)
     square.paste(small, ((EOB_SIZE - width) // 2, 0))
-    # drawIcon plots stored (row, col) at screen (size - 1 - row, col): rows run right to left.
+    # drawIcon plots stored (row, col) at screen (size - 1 - row, col).
     row_bytes = (EOB_SIZE + 7) // 8
     packed = bytearray([0xFF] * (row_bytes * EOB_SIZE))
     for row in range(EOB_SIZE):
@@ -135,46 +156,27 @@ def build_end_of_book(art):
 
 def build_web_icon(art):
     scale = WEB_SIZE / max(art.size)
-    small = art.resize((round(art.size[0] * scale), round(art.size[1] * scale)), Image.LANCZOS)
-    # Black ink on a transparent background; the white book and face stay opaque white.
-    rgba = Image.new("RGBA", small.size)
-    rgba.putdata([(v, v, v, 255) for v in small.tobytes()])
-    mask = ImageOps.invert(small).point(lambda v: 255 if v > 8 else 0)
-    outside = Image.new("L", small.size, 0)
-    outside.paste(255, mask=_fill_holes(mask))
-    rgba.putalpha(outside)
+    w = round(art.size[0] * scale)
+    h = round(art.size[1] * scale)
+    small = bw(art, w, h)
+    alpha = build_footprint(art, w, h, small)
+    rgba = Image.merge("RGBA", (small, small, small, alpha))
     icon = Image.new("RGBA", (WEB_SIZE, WEB_SIZE), (0, 0, 0, 0))
-    icon.paste(rgba, ((WEB_SIZE - small.size[0]) // 2, (WEB_SIZE - small.size[1]) // 2))
+    icon.paste(rgba, ((WEB_SIZE - w) // 2, (WEB_SIZE - h) // 2))
     buf = io.BytesIO()
     icon.save(buf, "PNG", optimize=True)
     data = base64.b64encode(buf.getvalue()).decode()
     return (
-        "<!-- The Matcha cat: all rights reserved, not MIT. See assets/images/LICENSE. -->\n"
+        "<!-- Hojicha Reader raccoon-dog mascot. -->\n"
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WEB_SIZE}" height="{WEB_SIZE}" '
         f'viewBox="0 0 {WEB_SIZE} {WEB_SIZE}"><image width="{WEB_SIZE}" height="{WEB_SIZE}" '
         f'href="data:image/png;base64,{data}"/></svg>\n'
     )
 
 
-def _fill_holes(ink):
-    """The drawing's footprint: ink plus everything it encloses (the white book, face, ears)."""
-    w, h = ink.size
-    px = ink.load()
-    outside = bytearray(w * h)
-    stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
-    while stack:
-        x, y = stack.pop()
-        if 0 <= x < w and 0 <= y < h and not outside[y * w + x] and px[x, y] == 0:
-            outside[y * w + x] = 1
-            stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
-    return Image.frombytes("L", (w, h), bytes(0 if o else 255 for o in outside))
-
-
 STAMP_SIZE = 220
 
-
-# The stamp's wording per book language, each lettered in the Noto Serif cut for its region so the
-# glyphs take that region's forms. Japanese and every non-Chinese book get 読了.
+# The Japanese and Chinese end-of-book stamps are otherwise unchanged.
 STAMPS = (
     ("EobStampJa", "読了", "NotoSerifJP.ttf"),
     ("EobStampZhHans", "读完", "NotoSerifSC.ttf"),
@@ -184,9 +186,7 @@ STAMPS = (
 
 
 def build_stamp(font_path, text):
-    """A hanko: a double ring and two characters, worn like real ink. The date under them is drawn
-    by the firmware; the space for it is left empty. Returns the run-length coded bitmap: each byte
-    is (ink << 7) | (run - 1), runs of 1-128 pixels in row-major order, continuing across rows."""
+    """Hanko RLE, same byte format as the original Matcha Reader generator."""
     from PIL import ImageDraw, ImageFont
 
     scale = 4
@@ -198,14 +198,11 @@ def build_stamp(font_path, text):
     draw.ellipse([inner, inner, size - inner, size - inner], outline=255, width=2 * scale)
     font = ImageFont.truetype(str(font_path), int(size * 0.30))
     font.set_variation_by_axes([700])
-    # Centred by the glyphs' ink, not the font box. With the start and finish dates the firmware draws
-    # under them, the characters and dates sit as one block in the middle of the ring.
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     x = (size - (right - left)) / 2 - left
     y = size * 0.38 - (bottom - top) / 2 - top
     draw.text((x, y), text, fill=255, font=font)
-    img = img.resize((STAMP_SIZE, STAMP_SIZE), Image.LANCZOS).point(lambda v: 255 if v > 110 else 0)
-    # Worn ink: a fixed scatter of missing specks, the same on every build.
+    img = img.resize((STAMP_SIZE, STAMP_SIZE), Image.Resampling.LANCZOS).point(lambda v: 255 if v > 110 else 0)
     rng = random.Random(3)
     px = img.load()
     for _ in range(STAMP_SIZE * STAMP_SIZE // 18):
@@ -234,10 +231,33 @@ def c_array(data, per_line=19):
     return "\n".join(lines)
 
 
+def write_preview(art):
+    """Save enlarged views of the regular generated logo for visual checks."""
+    w = LOGO_WIDTH
+    h = round(art.height * w / art.width)
+    binary = bw(art, w, h)
+    footprint = build_footprint(art, w, h, binary)
+    # Dark screen: white artwork only within the footprint; black stays black.
+    dark = Image.new("L", (w, h), 0)
+    dark.paste(binary, mask=footprint)
+    light = binary
+    out_dir = ROOT / ".pio"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, img in (("mascot-preview-dark.png", dark), ("mascot-preview-light.png", light)):
+        path = out_dir / name
+        img.resize((w * 3, h * 3), Image.Resampling.NEAREST).save(path)
+        print(f"Preview: {path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--stamp-fonts", type=Path, help="folder with NotoSerif{JP,SC,TC,HK}.ttf")
+    parser.add_argument("--preview", action="store_true", help="save dark/light logo previews into .pio/")
     args = parser.parse_args()
+
+    if not SOURCE.is_file():
+        parser.error(f"mascot source not found: {SOURCE}")
+
     if args.stamp_fonts:
         arrays = []
         for name, text, font in STAMPS:
@@ -251,23 +271,21 @@ def main():
             "// Generated by scripts/generate_mascot_assets.py --stamp-fonts.\n"
             f"static constexpr int EOB_STAMP_SIZE = {STAMP_SIZE};\n\n" + "\n".join(arrays)
         )
-    edged = Image.open(SOURCE).convert("L")
-    art = edged.point(lambda v: 255 if v >= EDGE_LEVEL else v)
-    width, height, logo = build_logo(art, edged)
-    small_width, small_height, small_logo = build_logo(art, edged, SMALL_LOGO_WIDTH)
+
+    # Preserve grayscale source loading. Transparent PNGs should have a white
+    # background before conversion, because dark-mode backing is mask-based.
+    art = Image.open(SOURCE).convert("L")
+    width, height, logo = build_logo(art)
+    small_width, small_height, small_logo = build_logo(art, SMALL_LOGO_WIDTH)
+
     (ROOT / "src" / "images" / "CatLogo.h").write_text(
         "#pragma once\n#include <cstdint>\n\n"
-        f"// {width}x{height} cat logo, run-length coded: each byte is (symbol << 5) | (run - 1), runs of 1-32\n"
-        "// pixels in row-major order, continuing across rows. symbol = footprint << 2 | level, where\n"
-        "// level 0 = black, 1 = dark gray, 2 = light gray, 3 = white, and footprint marks the cat, the books\n"
-        "// and the sticker edge around them, which the dark sleep screen keeps lit.\n"
-        "// Generated by scripts/generate_mascot_assets.py from assets/images/cat-reading.png.\n"
-        "// The Matcha cat: all rights reserved, not MIT -- see assets/images/LICENSE.\n"
+        f"// {width}x{height} Hojicha Reader mascot, RLE: (symbol << 5) | (run - 1), runs of 1-32.\n"
+        "// symbol = (footprint << 2) | level; level 0=black, 3=white (compatible 4-level format).\n"
+        "// Generated by scripts/generate_mascot_assets.py from assets/images/raccoon-dog-reading.png.\n"
         f"static constexpr int CAT_LOGO_WIDTH = {width};\n"
         f"static constexpr int CAT_LOGO_HEIGHT = {height};\n"
         f"static const uint8_t CatLogoRle[] = {{\n{c_array(logo)}\n}};\n\n"
-        "// The same cat at a smaller size, coded the same way and then raw-deflated: it is drawn only by\n"
-        "// the Departures sleep screen, which inflates it into a CAT_LOGO_SMALL_RLE_SIZE buffer.\n"
         f"static constexpr int CAT_LOGO_SMALL_WIDTH = {small_width};\n"
         f"static constexpr int CAT_LOGO_SMALL_HEIGHT = {small_height};\n"
         f"static constexpr int CAT_LOGO_SMALL_RLE_SIZE = {len(small_logo)};\n"
@@ -275,13 +293,16 @@ def main():
     )
     (ROOT / "src" / "components" / "icons" / "endOfBookCat.h").write_text(
         "#pragma once\n#include <cstdint>\n\n"
-        "// Reading cat for the end-of-book screen, 1 bpp, drawn with GfxRenderer::drawIcon.\n"
-        "// Generated by scripts/generate_mascot_assets.py from assets/images/cat-reading.png.\n"
-        "// The Matcha cat: all rights reserved, not MIT -- see assets/images/LICENSE.\n"
+        "// Hojicha Reader raccoon-dog mascot for the end-of-book screen, 1 bpp drawIcon format.\n"
+        "// Generated by scripts/generate_mascot_assets.py from assets/images/raccoon-dog-reading.png.\n"
         f"static constexpr int END_OF_BOOK_CAT_SIZE = {EOB_SIZE};\n"
         f"static const uint8_t EndOfBookCat[] = {{\n{c_array(build_end_of_book(art))}\n}};\n"
     )
     (ROOT / "src" / "network" / "html" / "assets" / "matcha-icon.svg").write_text(build_web_icon(art))
+    print(f"Generated mascot: {width}x{height}; small: {small_width}x{small_height}")
+
+    if args.preview:
+        write_preview(art)
 
 
 if __name__ == "__main__":

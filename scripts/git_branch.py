@@ -87,7 +87,7 @@ def inject_version(env):
     base_version = get_base_version(project_dir)
     # This fork's dev/test builds carry a stable fork identity instead of branch+SHA.
     # -debug marks the LOG_LEVEL=2 dev environment apart from release binaries.
-    version_string = f'matcha-reader-{base_version}-debug'
+    version_string = f'hojicha-reader-{base_version}-debug'
 
     def add_version(build_env, node):
         # Only these translation units depend on Git metadata. Keep library and
