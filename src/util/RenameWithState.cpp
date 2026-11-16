@@ -2,6 +2,7 @@
 
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <HojichaCacheRefresh.h>
 #include <Logging.h>
 #include <MangaPanel.h>
 
@@ -64,6 +65,10 @@ std::string bookCachePath(const std::string& path) {
 }
 
 bool renamePathWithState(const std::string& oldPath, const std::string& newPath, const char* logTag) {
+  if (!hojicha::canRenamePath(oldPath)) {
+    LOG_ERR(logTag, "Cannot rename path with an incomplete or unreadable content update: %s", oldPath.c_str());
+    return false;
+  }
   // Pass 1: move every book's cache and bookmarks to the names the new path implies. Stops at the
   // first failure, and pass 1b puts back everything pass 1 moved -- all-or-nothing, so the card is
   // never left with a book's state filed under a name no book has.

@@ -3,6 +3,7 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <HojichaCacheRefresh.h>
 #include <MangaPanel.h>
 #include <Memory.h>
 
@@ -87,7 +88,7 @@ void ReaderActivity::onEnter() {
   // leak (free falls) from fragmentation (free stable, largest collapses).
   LOG_INF("MEM", "reader enter: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 
-  if (!Storage.exists(bookPath.c_str())) {
+  if (!Storage.exists(bookPath.c_str()) && hojicha::updateState(bookPath) == hojicha::UpdateState::None) {
     LOG_ERR("READER", "File does not exist: %s", bookPath.c_str());
     finish();
     return;

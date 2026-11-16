@@ -40,6 +40,8 @@ class CrossPointWebServer {
     // Overwriting an existing file: data goes to "<file>.part", which replaces
     // the file only after the whole upload is written.
     bool staged = false;
+    bool contentUpdate = false;
+    int errorStatus = 400;
 
     // Upload write buffer - batches small writes into larger SD card operations
     // 4KB is a good balance: large enough to reduce syscall overhead, small enough

@@ -929,6 +929,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // Protection error captured by loadBook() for handleLoadFailure(); the
   // failed Epub itself does not outlive loadBook().
   std::string loadProtectionError;
+  bool loadUpdateIncomplete = false;
 
   bool loadBook() override;
   bool hasBook() const override { return epub != nullptr; }

@@ -2,6 +2,7 @@
 
 #include <Epub.h>
 #include <FsHelpers.h>
+#include <HojichaCacheRefresh.h>
 #include <Logging.h>
 #include <Xtc.h>
 
@@ -23,7 +24,7 @@ bool isBookCacheDirectoryName(const char* name) {
 
 void clearBookCache(const std::string& path) {
   if (FsHelpers::hasReflowableBookExtension(path)) {
-    Epub(path, "/.crosspoint").clearCache();
+    if (Epub(path, "/.crosspoint").clearCache()) hojicha::discardContentUpdate(path);
   } else if (FsHelpers::hasXtcExtension(path)) {
     Xtc(path, "/.crosspoint").clearCache();
   } else {

@@ -1114,6 +1114,18 @@ bool markLibraryIndexDirty() {
 
 bool isLibraryIndexDirty() { return dirtyInMemory || Storage.exists(DIRTY_PATH); }
 
+bool persistLibraryIndexDirty(std::string& failedPath) {
+  dirtyInMemory = true;
+  HalFile marker;
+  if (!Storage.ensureDirectoryExists(CACHE_DIR) || !Storage.openFileForWrite("LIBIDX", DIRTY_PATH, marker) ||
+      !marker.close()) {
+    failedPath = DIRTY_PATH;
+    LOG_ERR("LIBIDX", "cannot persist library dirty marker: %s", DIRTY_PATH);
+    return false;
+  }
+  return true;
+}
+
 bool buildLibraryIndex(const char* rootPath, BuildStats& stats, const bool readMetadata) {
   const uint32_t startMs = millis();
   uint32_t serviceUnits = 0;
