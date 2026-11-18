@@ -49,8 +49,12 @@ reserved from general HTTP/plugin file operations (WebDAV already blocks hidden 
 
 Only after the record is closed and read back does the device replace the EPUB.
 It then removes the selected caches, persists a library-dirty notification, and
-removes the record last. Missing cache files are harmless. Any failed operation
-leaves an error and, once created, the read barrier. There is no full-clear fallback.
+removes the record last. Missing cache files are harmless. If writing, closing or
+verifying a new record fails, the device attempts to delete that new record and
+aborts without touching the original EPUB or its caches. Successful cleanup leaves
+the original book readable. Failed cleanup is logged and can leave the book blocked;
+use the manual recovery steps below. A pre-existing record is never removed by this
+cleanup. Failures after replacement retain the read barrier. There is no full-clear fallback.
 
 After a connection loss or missing success response, retransmit the entire EPUB
 with the same filename, directory, `overwrite=1` and `cache=content`. Do not resume
@@ -93,8 +97,20 @@ still requires backup-based recovery. No hardware power-loss result is claimed.
 
 ## Acceptance tests
 
-Hardware acceptance is pending. Do not enable automatic Wi-Fi updates in PC scripts.
-Back up the card and use disposable test books, with position sync disabled:
+The owner accepted normal-update behavior on X4 Pro on 2026-11-18:
+
+- A and B resumed at the original chapter-3 position; B displayed the updated sentence.
+- C resumed in the inserted interlude, consistent with the unchanged spine index.
+  A follow-up from old chapter page 3/3 resumed at interlude page 2/2 rather than an invalid page.
+- Before/after snapshots of all three books preserved progress, preferences and CSS byte-for-byte.
+  All three `book.bin` files and nine vertical-section files were removed; B's `pace.bin` was preserved.
+  The saved files were independently hashed: 22 before and 10 after.
+
+These results cover normal updates and the tested insertion/page-range case. Physical SD-error,
+power-loss recovery and generated-image deletion were not tested on hardware. Automated fault
+injection covers storage failures; it does not establish physical power-loss behavior.
+
+For further testing, back up the card and use disposable books, with position sync disabled:
 
 1. Record position text, per-book preferences, and hashes of preserved files. Update
    with chapter additions, text edits and inserted images. Before first open, verify

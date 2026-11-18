@@ -126,6 +126,80 @@ void checkSuccessAndRetry() {
   assertPreserved();
 }
 
+void checkMarkerCreationFailures() {
+  enum class Failure { HeaderWrite, PathWrite, Close, ReadOpen, HeaderRead, PathRead, ReadMismatch };
+  for (const auto failure : {Failure::HeaderWrite, Failure::PathWrite, Failure::Close, Failure::ReadOpen,
+                             Failure::HeaderRead, Failure::PathRead, Failure::ReadMismatch}) {
+    for (const bool cleanupFails : {false, true}) {
+      seed();
+      const auto original = Storage.files;
+      switch (failure) {
+        case Failure::HeaderWrite:
+          Storage.shortWriteNumber = 1;
+          break;
+        case Failure::PathWrite:
+          Storage.shortWriteNumber = 2;
+          break;
+        case Failure::Close:
+          Storage.failClose = MARKER;
+          break;
+        case Failure::ReadOpen:
+          Storage.failReadOpen = MARKER;
+          break;
+        case Failure::HeaderRead:
+          Storage.shortReadNumber = 1;
+          break;
+        case Failure::PathRead:
+          Storage.shortReadNumber = 2;
+          break;
+        case Failure::ReadMismatch:
+          Storage.corruptRead = true;
+          break;
+      }
+      if (cleanupFails) Storage.failRemove = MARKER;
+      std::string failed;
+      assert(!hojicha::installContentUpdate(BOOK, PART, failed));
+      assert(failed == MARKER);
+      assert(Storage.removes == 1);
+      assert(Storage.files.count(MARKER) == static_cast<size_t>(cleanupFails));
+      for (const auto& [path, node] : original) {
+        assert(Storage.files.at(path).directory == node.directory);
+        assert(Storage.files.at(path).bytes == node.bytes);
+      }
+      Storage.shortWriteNumber = Storage.shortReadNumber = 0;
+      Storage.failClose.clear();
+      Storage.failReadOpen.clear();
+      Storage.corruptRead = false;
+      if (!cleanupFails) {
+        assert(hojicha::updateState(BOOK) == UpdateState::None);
+        assert(hojicha::installContentUpdate(BOOK, PART, failed));
+        assert(hojicha::finishContentUpdate(BOOK, failed));
+        assertDeleted();
+        assertPreserved();
+      }
+    }
+  }
+
+  seed();
+  std::string failed;
+  assert(hojicha::beginContentUpdate(BOOK, failed));
+  const std::string pending = Storage.files.at(MARKER).bytes;
+  const int writes = Storage.writes;
+  Storage.failWrite = true;
+  Storage.failClose = MARKER;
+  assert(hojicha::beginContentUpdate(BOOK, failed));
+  assert(Storage.writes == writes && Storage.removes == 0);
+  assert(Storage.files.at(MARKER).bytes == pending);
+  Storage.failReadOpen = MARKER;
+  assert(!hojicha::beginContentUpdate(BOOK, failed));
+  assert(Storage.removes == 0 && Storage.files.at(MARKER).bytes == pending);
+  Storage.failReadOpen.clear();
+  Storage.files[MARKER].bytes = "damaged previous record";
+  assert(!hojicha::beginContentUpdate(BOOK, failed));
+  assert(Storage.removes == 0 && Storage.files.at(MARKER).bytes == "damaged previous record");
+  assertPreserved();
+}
+
 void checkFailures() {
   std::string failed;
   for (int removeNumber = 1; removeNumber <= 9; ++removeNumber) {
@@ -183,6 +257,7 @@ int main() {
   checkAdmission();
   checkFatSpelling();
   checkSuccessAndRetry();
+  checkMarkerCreationFailures();
   checkFailures();
   std::cout << "Hojicha cache admission, preservation, interruption and retry checks passed\n";
 }

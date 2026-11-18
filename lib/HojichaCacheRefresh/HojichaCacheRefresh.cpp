@@ -223,7 +223,11 @@ bool beginContentUpdate(const std::string& bookPath, std::string& failedPath) {
   const bool written = file.write(header, sizeof(header)) == sizeof(header) &&
                        file.write(bookPath.data(), bookPath.size()) == bookPath.size();
   const bool closed = file.close();
-  if (!written || !closed || updateState(bookPath) != UpdateState::Pending) return fail(path, failedPath);
+  if (!written || !closed || updateState(bookPath) != UpdateState::Pending) {
+    // Only this call's new record is disposable: the EPUB has not been replaced yet.
+    if (!Storage.remove(path)) LOG_ERR("HCU", "Cannot remove failed new update record: %s", path);
+    return fail(path, failedPath);
+  }
   return true;
 }
 

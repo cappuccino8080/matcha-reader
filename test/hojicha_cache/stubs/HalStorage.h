@@ -24,6 +24,12 @@ class TestStorage {
   std::string failEnumeration;
   std::string failExists;
   std::string failClose;
+  std::string failReadOpen;
+  int shortWriteNumber = 0;
+  int writes = 0;
+  int shortReadNumber = 0;
+  int reads = 0;
+  bool corruptRead = false;
   bool failWrite = false;
   bool failMkdir = false;
   bool failRename = false;
@@ -112,14 +118,19 @@ class HalFile {
   size_t size() const { return Storage.files.at(path_).bytes.size(); }
   int read(void* out, size_t count) {
     if (!valid_) return -1;
+    ++Storage.reads;
+    if (Storage.shortReadNumber == Storage.reads) return 0;
     const auto& bytes = Storage.files.at(path_).bytes;
     count = std::min(count, bytes.size() - offset_);
     memcpy(out, bytes.data() + offset_, count);
+    if (Storage.corruptRead && count) static_cast<char*>(out)[0] ^= 1;
     offset_ += count;
     return static_cast<int>(count);
   }
   size_t write(const void* data, size_t count) {
+    ++Storage.writes;
     if (Storage.failWrite) return 0;
+    if (Storage.shortWriteNumber == Storage.writes && count) --count;
     Storage.files.at(path_).bytes.append(static_cast<const char*>(data), count);
     return count;
   }
@@ -156,6 +167,7 @@ inline HalFile TestStorage::open(const char* path) {
   return path != failOpen && !actual.empty() ? HalFile(actual) : HalFile{};
 }
 inline bool TestStorage::openFileForRead(const char*, const char* path, HalFile& file) {
+  if (path == failReadOpen) return false;
   file = open(path);
   return static_cast<bool>(file);
 }
