@@ -207,6 +207,10 @@ class HalStorage {
   }
 
   bool exists(const char* path) const { return fake::files.count(path) != 0; }
+  bool ensureDirectoryExists(const char* path) {
+    if (exists(path)) return fake::files.at(path)->directory;
+    return mkdir(path);
+  }
   bool mkdir(const char* path) {
     if (!exists(path)) fake::add(path, "");
     fake::files[path]->directory = true;

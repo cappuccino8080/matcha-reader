@@ -48,6 +48,31 @@ class LibraryBuilderTest : public ::testing::Test {
 
 }  // namespace
 
+TEST_F(LibraryBuilderTest, PersistsDirtyMarkerWithoutCacheDirectory) {
+  std::string failedPath;
+  ASSERT_FALSE(Storage.exists("/.crosspoint"));
+  ASSERT_TRUE(persistLibraryIndexDirty(failedPath));
+  EXPECT_TRUE(Storage.open("/.crosspoint").isDirectory());
+  EXPECT_TRUE(Storage.exists("/.crosspoint/library.dirty"));
+}
+
+TEST_F(LibraryBuilderTest, RejectsDirtyMarkerWhenCachePathIsAFile) {
+  fake::add("/.crosspoint", "keep this file");
+  std::string failedPath;
+  EXPECT_FALSE(persistLibraryIndexDirty(failedPath));
+  EXPECT_FALSE(Storage.open("/.crosspoint").isDirectory());
+  EXPECT_FALSE(Storage.exists("/.crosspoint/library.dirty"));
+  EXPECT_EQ(failedPath, "/.crosspoint/library.dirty");
+}
+
+TEST_F(LibraryBuilderTest, ReportsDirtyMarkerCloseFailure) {
+  fake::failClosePath = "/.crosspoint/library.dirty";
+  std::string failedPath;
+  EXPECT_FALSE(persistLibraryIndexDirty(failedPath));
+  EXPECT_TRUE(fake::failureTriggered);
+  EXPECT_EQ(failedPath, "/.crosspoint/library.dirty");
+}
+
 TEST(LibraryBookFileTest, AcceptsBookFilesTheWalkLists) {
   EXPECT_TRUE(isLibraryBookFile("book.epub"));
   EXPECT_TRUE(isLibraryBookFile("/Books/book.epub"));
