@@ -8,6 +8,7 @@
 #include <GifLimitedWriter.h>
 #include <GifToBmpConverter.h>
 #include <HalStorage.h>
+#include <HojichaCacheRefresh.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
 #include <PngToBmpConverter.h>
@@ -624,6 +625,10 @@ bool Epub::openProtection() {
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvertCancelFn shouldCancel,
                 void* cancelCtx) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
+  if (hojicha::updateState(filepath) != hojicha::UpdateState::None) {
+    LOG_ERR("EBP", "Content update incomplete: %s", filepath.c_str());
+    return false;
+  }
   if (shouldCancel && shouldCancel(cancelCtx)) return false;
 
   // Before any parsing: a protected book's entries are only readable through the accessor.
@@ -707,6 +712,15 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvert
     return false;
   }
   if (shouldCancel && shouldCancel(cancelCtx)) return false;
+
+  // The no-book.bin path must validate preserved CSS before parseCssFiles can reuse it.
+  if (!skipLoadingCss && cssParser->hasCache() && !cssParser->validateCache()) {
+    const std::string cssPath = cachePath + "/css_rules.cache";
+    if (Storage.exists(cssPath.c_str()) && !Storage.remove(cssPath.c_str())) {
+      LOG_ERR("EBP", "Cannot remove invalid CSS cache: %s", cssPath.c_str());
+      return false;
+    }
+  }
 
   if (Txt::isTxtOrMd(filepath)) {
     return Txt::buildTxtCache(filepath, cachePath, bookMetadataCache);
@@ -816,6 +830,10 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, BmpConvert
 bool Epub::loadMetadata(std::string& title, std::string& author) {
   title.clear();
   author.clear();
+  if (hojicha::updateState(filepath) != hojicha::UpdateState::None) {
+    LOG_ERR("EBP", "Metadata blocked by incomplete content update: %s", filepath.c_str());
+    return false;
+  }
 
   if (Txt::isTxtOrMd(filepath)) {
     title = utf8ComposeNfc(FsHelpers::getFileNameWithoutExtension(filepath));

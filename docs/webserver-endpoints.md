@@ -132,6 +132,7 @@ Query parameters:
 |-----------|----------|---------|-------------|
 | `path` | No | `/` | Destination directory |
 | `overwrite` | No | off | `1` or `true` replaces a file with the same name |
+| `cache` | No | full clear | Hojicha: `content` preserves reading state when updating an existing EPUB at the same path. Other values are rejected. |
 
 Successful response:
 
@@ -144,16 +145,46 @@ Notes:
 - Without `overwrite`, an existing file with the same name is kept and the
   request fails with `400` "File already exists: <name>".
 - With `overwrite`, the upload is written to `<name>.part` and replaces the
-  existing file only when it is complete, so a failed upload keeps the old file.
+  existing file only when it is complete. Failure during transfer keeps the old file;
+  the final remove-and-rename replacement is not power-loss atomic.
   The card needs free space for both copies while the upload runs. A file
   already named `<name>.part` is replaced. If a folder has the name, the
   request fails with `400` "A folder with this name already exists: <name>".
-- EPUB cache data for the uploaded path is cleared after a successful upload.
+- EPUB cache data for the uploaded path is cleared after a successful upload,
+  except for the explicit Hojicha `cache=content` mode described below.
 - Uploading a book file (`.epub`, `.txt`, `.md`, `.xtc`), here or through the
   WebSocket upload, marks the Library index stale, so the book appears the next
   time the Library opens. Hidden files and folders (names that start with `.`)
   don't mark it.
 - HTTP upload uses a 4 KB write buffer before flushing to the SD card.
+
+For `cache=content`, `overwrite=1` or `overwrite=true` is required. The destination
+must be an existing regular EPUB, or the exact path recorded by a valid interrupted
+content update. Invalid paths, non-EPUB files, unknown cache values and new books
+return `400` before opening the upload file. A conflicting `.part` or invalid pending
+record returns `409`. Storage/install/invalidation failures return an error rather
+than success (`500` for the content install phase), with the failed path when known.
+The mode rejects path traversal, repeated separators, FAT aliases and components
+whose spelling FAT would trim. Send the destination directory as an absolute path.
+Each path component must match the exact on-card case; case aliases are rejected
+because the existing reading-cache hash distinguishes their spelling.
+
+The content mode clears only `book.bin`, `sections/`, `vsections/`, `html/`, and
+generated `img_<spine>_<sequence>` / `img_v<spine>_<sequence>` images and `.pxc` files.
+It keeps reading state and CSS; invalid CSS is regenerated on open when embedded
+styles are enabled. Spine changes do not reject a transfer but can change the resumed
+chapter. Cover and other unlisted files remain untouched.
+
+An internal record under `/.crosspoint/hojicha-updates/` blocks reader and EPUB
+metadata-cache access after an interrupted replacement or incomplete invalidation.
+These records are protected from web file operations. Retransmit the full EPUB using
+the same path, filename and options; a valid record permits recovery even if the
+formal EPUB is missing. A leftover `.part` is overwritten only for this valid retry.
+State-preserving rename of a pending book, or a containing folder, is refused until
+retransmission succeeds; completed books retain their existing rename behavior.
+Success is returned only after invalidation and record removal. A normal full-cache
+replacement still resets reading state and also retires its pending record after
+the full clear succeeds. See [recovery and acceptance tests](hojicha-content-update.md).
 
 ### `POST /mkdir`
 

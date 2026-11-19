@@ -18,6 +18,7 @@
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
+#include <HojichaCacheRefresh.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -510,6 +511,8 @@ void EpubReaderActivity::saveBookPrefs(const ReaderPrefs& prefs) const {
 }
 
 bool EpubReaderActivity::loadBook() {
+  loadUpdateIncomplete = hojicha::updateState(bookPath) != hojicha::UpdateState::None;
+  if (loadUpdateIncomplete) return false;
   if (ESP.getMaxAllocHeap() < 64 * 1024) {
     // Unload the fonts themselves, not just their caches: the fonts the previous screen used (the
     // cover grid's CJK titles pull in the Japanese companion) keep small tables mid-heap that a
@@ -2766,6 +2769,13 @@ constexpr uint32_t LOW_HEAP_REOPEN_BYTES = 64 * 1024;
 // instead of silently falling back to the previous screen. Exact error
 // strings are set by openProtectedBook (ContentProtection.cpp).
 bool EpubReaderActivity::handleLoadFailure() {
+  if (loadUpdateIncomplete) {
+    sdFontSystem.ensureLoaded(renderer);
+    const char* options[] = {tr(STR_OK_BUTTON)};
+    loadFailurePopup.showMessage("", tr(STR_CONTENT_UPDATE_PENDING), options, 1, 0, [this](int) { finish(); });
+    requestUpdate();
+    return true;
+  }
   if (loadProtectionError.empty()) return false;
   // loadBook() may have unloaded the resident fonts to give the book one clean region of heap.
   // onReaderEnter(), which puts them back, never runs for a book that did not open, and under a

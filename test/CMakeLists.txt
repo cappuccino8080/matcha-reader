@@ -36,6 +36,7 @@ target_compile_options(crosspoint_test_common INTERFACE
 )
 
 enable_testing()
+add_subdirectory(hojicha_cache)
 include(GoogleTest)
 
 add_subdirectory(streaming_json_parser)

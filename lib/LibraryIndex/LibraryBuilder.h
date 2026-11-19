@@ -74,6 +74,8 @@ const char* libraryIndexPath();
 // A successful book transfer marks the retained index stale. The next Library
 // entry rebuilds it through the normal reconciliation path.
 bool markLibraryIndexDirty();
+// Stronger completion contract for updates that must survive an immediate restart.
+bool persistLibraryIndexDirty(std::string& failedPath);
 bool isLibraryIndexDirty();
 
 // Whether `path` (a full path or a bare name) passes the walk's name filter: a

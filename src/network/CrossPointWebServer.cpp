@@ -10,6 +10,7 @@
 #include <HalMemory.h>
 #include <HalStorage.h>
 #include <HiddenItems.h>
+#include <HojichaCacheRefresh.h>
 #include <I18n.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
@@ -1136,12 +1137,22 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.success = false;
     state.error = "";
     state.staged = false;
+    state.contentUpdate = false;
+    state.errorStatus = 400;
     uploadStartTime = millis();
     lastLoggedSize = 0;
     state.bufferPos = 0;
     totalWriteTime = 0;
     writeCount = 0;
     state.buffer.reset();
+
+    if (server->hasArg("cache")) {
+      if (server->arg("cache") != "content") {
+        state.error = tr(STR_CONTENT_UPDATE_INVALID);
+        return;
+      }
+      state.contentUpdate = true;
+    }
 
     if (!FsHelpers::isSafePathComponent(state.fileName)) {
       state.error = "Invalid file name";
@@ -1153,6 +1164,15 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     // Note: We use query parameter instead of form data because multipart form
     // fields aren't available until after file upload completes
     if (server->hasArg("path")) {
+      if (state.contentUpdate) {
+        String raw = server->arg("path");
+        if (!raw.endsWith("/")) raw += "/";
+        raw += state.fileName;
+        if (!hojicha::isSafeContentBookPath(std::string_view(raw.c_str(), raw.length()))) {
+          state.error = tr(STR_CONTENT_UPDATE_INVALID);
+          return;
+        }
+      }
       state.path = normalizeWebPath(server->arg("path"));
     } else {
       state.path = "/";
@@ -1174,9 +1194,36 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       return;
     }
 
+    if (state.contentUpdate) {
+      const String overwrite = server->arg("overwrite");
+      if (!FsHelpers::hasEpubExtension(state.fileName) || (overwrite != "1" && overwrite != "true")) {
+        state.error = tr(STR_CONTENT_UPDATE_INVALID);
+        return;
+      }
+      const auto check = hojicha::checkContentUpload(filePath.c_str(), (filePath + ".part").c_str());
+      switch (check) {
+        case hojicha::UploadCheck::Ready:
+          state.staged = true;
+          break;
+        case hojicha::UploadCheck::InvalidPath:
+        case hojicha::UploadCheck::MissingBook:
+          state.error = tr(STR_CONTENT_UPDATE_INVALID);
+          return;
+        case hojicha::UploadCheck::InvalidRecord:
+        case hojicha::UploadCheck::StagingConflict:
+          state.errorStatus = 409;
+          state.error = tr(STR_CONTENT_UPDATE_CONFLICT);
+          return;
+        case hojicha::UploadCheck::StorageError:
+          state.errorStatus = 500;
+          state.error = tr(STR_CONTENT_UPDATE_FAILED);
+          return;
+      }
+    }
+
     // Check if file already exists - SD operations can be slow
     resetTaskWatchdogIfSubscribed();
-    if (Storage.exists(filePath.c_str())) {
+    if (!state.contentUpdate && Storage.exists(filePath.c_str())) {
       const String overwrite = server->arg("overwrite");
       if (overwrite != "1" && overwrite != "true") {
         state.error = "File already exists: " + state.fileName;
@@ -1261,6 +1308,29 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       }
       // close() writes the final size: a failed close must not replace the original.
       if (!state.file.close() && state.error.isEmpty()) state.error = "Failed to write final data to SD card";
+      if (state.contentUpdate) {
+        const std::string dest = uploadDestPath(state).c_str();
+        if (state.error.isEmpty()) {
+          std::string failedPath;
+          const bool installed = hojicha::installContentUpdate(dest, uploadWritePath(state).c_str(), failedPath, [] {
+            resetTaskWatchdogIfSubscribed();
+            delay(1);
+          });
+          if (!installed) library::markLibraryIndexDirty();
+          if (installed && library::persistLibraryIndexDirty(failedPath)) {
+            state.success = hojicha::finishContentUpdate(dest, failedPath);
+          }
+          if (!state.success) {
+            state.errorStatus = 500;
+            state.error = String(tr(STR_CONTENT_UPDATE_FAILED)) + " " + failedPath.c_str();
+          }
+          // A failed install may leave only .part. Keep it and the pending record for retransmission.
+        } else {
+          removeUploadedFile(state);
+        }
+        state.buffer.reset();
+        return;
+      }
       bool keepStaged = false;
       if (state.error.isEmpty() && state.staged) {
         resetTaskWatchdogIfSubscribed();  // removing a large original walks its cluster chain
@@ -1318,7 +1388,7 @@ void CrossPointWebServer::handleUploadPost(UploadState& state) const {
     server->send(200, "text/plain", "File uploaded successfully: " + state.fileName);
   } else {
     const String error = state.error.isEmpty() ? "Unknown error during upload" : state.error;
-    server->send(400, "text/plain", error);
+    server->send(state.errorStatus, "text/plain", error);
   }
   // A later POST without a file part must not repeat this result.
   state.success = false;

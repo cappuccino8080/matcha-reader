@@ -127,6 +127,8 @@ class HalFile : public Print {
   bool rename(const char* newPath);
   bool isDirectory() const;
   void rewindDirectory();
+  // Distinguishes a directory read failure from a normal end of enumeration.
+  uint8_t getError() const;
   bool close();
   HalFile openNextFile();
   bool isOpen() const;

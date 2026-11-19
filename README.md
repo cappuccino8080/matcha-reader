@@ -149,6 +149,26 @@ A wallpaper over the page you were reading. The book shows through. See [Guide Â
 
 ## Setup
 
+### Hojicha EPUB content updates
+
+Hojicha adds an explicit Wi-Fi update mode for continuing the same book at the same path:
+`POST /upload?path=/Books&overwrite=1&cache=content` (multipart field `file`).
+It removes the book's old metadata, chapter HTML/layouts and generated chapter images,
+while preserving reading position, per-book settings and valid CSS caches. Ordinary POST
+uploads and WebDAV PUT retain their full-cache clearing behavior.
+
+Use **File Transfer** after leaving the reader. Keep the same CSS template. Text edits and
+spine changes are accepted, but moving or replacing chapters can shift the resumed position.
+If new update-record creation fails, the device attempts to remove that record and leaves
+the original EPUB and caches unchanged. If cleanup fails, manual recovery may be needed.
+If an update is interrupted after replacement starts, that book is blocked until a successful retransmission with
+the same path and options; other books remain readable. There is no automatic rollback.
+The owner accepted the X4 Pro A/B/C normal-update tests on 2026-11-18. Physical SD-error
+and power-loss recovery remain untested; see [the update and recovery guide](docs/hojicha-content-update.md).
+For the A/B/C device fixtures, see [the Wi-Fi upload and USB cache comparison workflow](docs/hojicha-device-test-workflow.md).
+
+### Device setup
+
 Files go onto the SD card with a card reader or over Wi-Fi from the device's **File Transfer** screen.
 
 **1. Flash the firmware.**

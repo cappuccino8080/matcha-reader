@@ -296,6 +296,7 @@ bool HalStorage::removeDir(const char* path) { HAL_STORAGE_WRAPPED_CALL(removeDi
   return impl->file.method(__VA_ARGS__);
 
 void HalFile::flush() { HAL_FILE_WRAPPED_CALL(flush, ); }
+uint8_t HalFile::getError() const { HAL_FILE_WRAPPED_CALL(getError, ); }
 size_t HalFile::getName(char* name, size_t len) { HAL_FILE_WRAPPED_CALL(getName, name, len); }
 bool HalFile::setWindow(const uint32_t offset, const uint32_t length) {
   HalStorage::StorageLock lock;

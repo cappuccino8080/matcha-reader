@@ -1,4 +1,8 @@
 _language_name: "日本語"
+STR_CONTENT_UPDATE_INVALID: "内容更新には既存のEPUB、正しいパス、overwrite=1が必要です。"
+STR_CONTENT_UPDATE_CONFLICT: "更新記録または一時ファイルが競合しています。本をバックアップしてSDカードを確認してください。"
+STR_CONTENT_UPDATE_FAILED: "内容更新に失敗しました。読書状態を残してEPUBを再転送してください。失敗したパス:"
+STR_CONTENT_UPDATE_PENDING: "本の更新が未完了です。cache=contentでEPUBを再転送してください。再転送が拒否された場合はSDカードをバックアップして更新記録を確認してください。"
 _language_code: "JA"
 _order: "31"
 _bcp47: "ja"
